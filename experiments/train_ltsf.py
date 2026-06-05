@@ -12,9 +12,12 @@ from __future__ import annotations
 
 import argparse
 import copy
+import json
+import random
 import sys
 from pathlib import Path
 
+import numpy as np
 import torch
 import torch.nn as nn
 from torch.utils.data import DataLoader
@@ -22,6 +25,16 @@ from torch.utils.data import DataLoader
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
 from data import CustomCSV, ETTh1  # noqa: E402
 from model import EfficientDualAxis  # noqa: E402
+
+
+def set_seed(seed: int) -> None:
+    """Seed every RNG that affects weight init and data shuffling, so a multi-seed sweep
+    yields honest error bars and each run is reproducible."""
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed_all(seed)
 
 
 @torch.no_grad()
@@ -83,8 +96,12 @@ def main():
     ap.add_argument("--depth", type=int, default=2)
     ap.add_argument("--dataset", default="etth1",
                     help="'etth1' (auto-download) or a path to a custom CSV (Electricity/Traffic)")
+    ap.add_argument("--seed", type=int, default=2021)
+    ap.add_argument("--out", default="",
+                    help="append one JSON line per model to this file (for multi-seed aggregation)")
     args = ap.parse_args()
 
+    set_seed(args.seed)
     device = "cuda" if torch.cuda.is_available() else "cpu"
     sl, pl = args.seq_len, args.pred_len
     if args.dataset.lower() == "etth1":
@@ -95,7 +112,7 @@ def main():
     tr = DataLoader(mk("train"), batch_size=args.batch, shuffle=True)
     va = DataLoader(mk("val"), batch_size=args.batch)
     te = DataLoader(mk("test"), batch_size=args.batch)
-    print(f"device={device}  {name} ({n_vars} vars)  seq_len={sl} pred_len={pl}  "
+    print(f"device={device}  {name} ({n_vars} vars)  seq_len={sl} pred_len={pl}  seed={args.seed}  "
           f"train/val/test batches: {len(tr)}/{len(va)}/{len(te)}")
 
     results = {}
@@ -113,10 +130,15 @@ def main():
         mse, mae = evaluate(model, te, device)
         results[mname] = (mse, mae)
         print(f"  TEST  MSE {mse:.4f}  MAE {mae:.4f}")
+        if args.out:
+            with open(args.out, "a") as f:
+                f.write(json.dumps({"dataset": name, "pred_len": pl, "seq_len": sl,
+                                    "seed": args.seed, "model": mname, "mse": mse,
+                                    "mae": mae, "params": n_params}) + "\n")
 
     print(f"\n{'='*48}\n{name}  pred_len={pl}   (lower = better)")
-    for name, (mse, mae) in results.items():
-        print(f"  {name:<20} MSE {mse:.4f}  MAE {mae:.4f}")
+    for mname, (mse, mae) in results.items():
+        print(f"  {mname:<26} MSE {mse:.4f}  MAE {mae:.4f}")
     print("compare vs published DLinear/PatchTST/iTransformer at this horizon.")
 
 
