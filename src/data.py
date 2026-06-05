@@ -66,8 +66,17 @@ class CustomCSV(Dataset):
     question actually gets tested — ETTh1 has only 7 variables, too few to matter.
     """
 
+    DOWNLOAD_HINT = (
+        "Download the LTSF datasets first:\n"
+        "  pip install gdown\n"
+        "  gdown --folder https://drive.google.com/drive/folders/13Cg1KYOlzM5C7K8gK8NfC-F3EYxkM3D2\n"
+        "then find the CSV (e.g.  find . -name electricity.csv) and pass its real path."
+    )
+
     def __init__(self, path: str, split: str = "train", seq_len: int = 96, pred_len: int = 96):
         assert split in {"train", "val", "test"}
+        if not os.path.exists(path):
+            raise FileNotFoundError(f"{path} not found.\n{self.DOWNLOAD_HINT}")
         df = pd.read_csv(path)
         data = df[[c for c in df.columns if c.lower() != "date"]].values.astype(np.float32)
         n = len(data)
