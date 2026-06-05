@@ -20,7 +20,7 @@ import torch.nn as nn
 from torch.utils.data import DataLoader
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / "src"))
-from data import ETTh1  # noqa: E402
+from data import CustomCSV, ETTh1  # noqa: E402
 from model import EfficientDualAxis  # noqa: E402
 
 
@@ -81,33 +81,40 @@ def main():
     ap.add_argument("--batch", type=int, default=64)
     ap.add_argument("--dim", type=int, default=128)
     ap.add_argument("--depth", type=int, default=2)
+    ap.add_argument("--dataset", default="etth1",
+                    help="'etth1' (auto-download) or a path to a custom CSV (Electricity/Traffic)")
     args = ap.parse_args()
 
     device = "cuda" if torch.cuda.is_available() else "cpu"
     sl, pl = args.seq_len, args.pred_len
-    tr = DataLoader(ETTh1("train", sl, pl), batch_size=args.batch, shuffle=True)
-    va = DataLoader(ETTh1("val", sl, pl), batch_size=args.batch)
-    te = DataLoader(ETTh1("test", sl, pl), batch_size=args.batch)
-    print(f"device={device}  ETTh1  seq_len={sl} pred_len={pl}  "
+    if args.dataset.lower() == "etth1":
+        mk, n_vars, name = (lambda sp: ETTh1(sp, sl, pl)), ETTh1.N_VARS, "ETTh1"
+    else:
+        mk = lambda sp: CustomCSV(args.dataset, sp, sl, pl)  # noqa: E731
+        n_vars, name = mk("train").n_vars, Path(args.dataset).stem
+    tr = DataLoader(mk("train"), batch_size=args.batch, shuffle=True)
+    va = DataLoader(mk("val"), batch_size=args.batch)
+    te = DataLoader(mk("test"), batch_size=args.batch)
+    print(f"device={device}  {name} ({n_vars} vars)  seq_len={sl} pred_len={pl}  "
           f"train/val/test batches: {len(tr)}/{len(va)}/{len(te)}")
 
     results = {}
-    for name, model in [
-        ("LinearBaseline", LinearBaseline(sl, pl, ETTh1.N_VARS)),
+    for mname, model in [
+        ("LinearBaseline", LinearBaseline(sl, pl, n_vars)),
         ("DualAxis (channel-indep)",
-         EfficientDualAxis(ETTh1.N_VARS, sl, pl, dim=args.dim, depth=args.depth, cross_variable=False)),
+         EfficientDualAxis(n_vars, sl, pl, dim=args.dim, depth=args.depth, cross_variable=False)),
         ("DualAxis (cross-variable)",
-         EfficientDualAxis(ETTh1.N_VARS, sl, pl, dim=args.dim, depth=args.depth, cross_variable=True)),
+         EfficientDualAxis(n_vars, sl, pl, dim=args.dim, depth=args.depth, cross_variable=True)),
     ]:
         model = model.to(device)
         n_params = sum(p.numel() for p in model.parameters())
-        print(f"\n=== {name}  ({n_params:,} params) ===")
+        print(f"\n=== {mname}  ({n_params:,} params) ===")
         model = train(model, tr, va, device, args.epochs, args.lr, args.patience)
         mse, mae = evaluate(model, te, device)
-        results[name] = (mse, mae)
+        results[mname] = (mse, mae)
         print(f"  TEST  MSE {mse:.4f}  MAE {mae:.4f}")
 
-    print(f"\n{'='*48}\nETTh1  pred_len={pl}   (lower = better)")
+    print(f"\n{'='*48}\n{name}  pred_len={pl}   (lower = better)")
     for name, (mse, mae) in results.items():
         print(f"  {name:<20} MSE {mse:.4f}  MAE {mae:.4f}")
     print("compare vs published DLinear/PatchTST/iTransformer at this horizon.")
