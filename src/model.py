@@ -48,10 +48,11 @@ class LinearAttention(nn.Module):
 class DualAxisBlock(nn.Module):
     """One layer: sub-quadratic mixing along time, then across variables, then an MLP."""
 
-    def __init__(self, dim: int, heads: int):
+    def __init__(self, dim: int, heads: int, cross_variable: bool = True):
         super().__init__()
+        self.cross_variable = cross_variable
         self.temporal = LinearAttention(dim, heads)
-        self.variable = LinearAttention(dim, heads)
+        self.variable = LinearAttention(dim, heads) if cross_variable else None
         self.n1, self.n2, self.n3 = nn.LayerNorm(dim), nn.LayerNorm(dim), nn.LayerNorm(dim)
         self.mlp = nn.Sequential(nn.Linear(dim, 4 * dim), nn.GELU(), nn.Linear(4 * dim, dim))
 
@@ -62,22 +63,25 @@ class DualAxisBlock(nn.Module):
         xt = xt + self.temporal(self.n1(xt))
         x = xt.reshape(B, V, N, D)
         # (2) cross-variable mixing — at each patch position, across the V variables
-        xv = x.permute(0, 2, 1, 3).reshape(B * N, V, D)
-        xv = xv + self.variable(self.n2(xv))
-        x = xv.reshape(B, N, V, D).permute(0, 2, 1, 3)
+        if self.cross_variable:
+            xv = x.permute(0, 2, 1, 3).reshape(B * N, V, D)
+            xv = xv + self.variable(self.n2(xv))
+            x = xv.reshape(B, N, V, D).permute(0, 2, 1, 3)
         # (3) channel MLP
         return x + self.mlp(self.n3(x))
 
 
 class EfficientDualAxis(nn.Module):
     def __init__(self, n_vars: int, seq_len: int, pred_len: int,
-                 patch: int = 16, stride: int = 8, dim: int = 64, depth: int = 2, heads: int = 4):
+                 patch: int = 16, stride: int = 8, dim: int = 64, depth: int = 2, heads: int = 4,
+                 cross_variable: bool = True):
         super().__init__()
         self.patch, self.stride, self.seq_len = patch, stride, seq_len
         self.n_patches = (seq_len - patch) // stride + 1
         self.embed = nn.Linear(patch, dim)
         self.pos = nn.Parameter(torch.randn(1, 1, self.n_patches, dim) * 0.02)
-        self.blocks = nn.ModuleList([DualAxisBlock(dim, heads) for _ in range(depth)])
+        self.blocks = nn.ModuleList(
+            [DualAxisBlock(dim, heads, cross_variable) for _ in range(depth)])
         self.norm = nn.LayerNorm(dim)
         self.head = nn.Linear(self.n_patches * dim, pred_len)
 

@@ -94,7 +94,10 @@ def main():
     results = {}
     for name, model in [
         ("LinearBaseline", LinearBaseline(sl, pl, ETTh1.N_VARS)),
-        ("EfficientDualAxis", EfficientDualAxis(ETTh1.N_VARS, sl, pl, dim=args.dim, depth=args.depth)),
+        ("DualAxis (channel-indep)",
+         EfficientDualAxis(ETTh1.N_VARS, sl, pl, dim=args.dim, depth=args.depth, cross_variable=False)),
+        ("DualAxis (cross-variable)",
+         EfficientDualAxis(ETTh1.N_VARS, sl, pl, dim=args.dim, depth=args.depth, cross_variable=True)),
     ]:
         model = model.to(device)
         n_params = sum(p.numel() for p in model.parameters())
