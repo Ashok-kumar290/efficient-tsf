@@ -97,6 +97,8 @@ def main():
     ap.add_argument("--dataset", default="etth1",
                     help="'etth1' (auto-download) or a path to a custom CSV (Electricity/Traffic)")
     ap.add_argument("--seed", type=int, default=2021)
+    ap.add_argument("--max-vars", type=int, default=0,
+                    help="subsample to this many variables (0 = all); for the crossover study")
     ap.add_argument("--out", default="",
                     help="append one JSON line per model to this file (for multi-seed aggregation)")
     args = ap.parse_args()
@@ -107,7 +109,7 @@ def main():
     if args.dataset.lower() == "etth1":
         mk, n_vars, name = (lambda sp: ETTh1(sp, sl, pl)), ETTh1.N_VARS, "ETTh1"
     else:
-        mk = lambda sp: CustomCSV(args.dataset, sp, sl, pl)  # noqa: E731
+        mk = lambda sp: CustomCSV(args.dataset, sp, sl, pl, max_vars=args.max_vars)  # noqa: E731
         n_vars, name = mk("train").n_vars, Path(args.dataset).stem
     tr = DataLoader(mk("train"), batch_size=args.batch, shuffle=True)
     va = DataLoader(mk("val"), batch_size=args.batch)
@@ -134,7 +136,7 @@ def main():
             with open(args.out, "a") as f:
                 f.write(json.dumps({"dataset": name, "pred_len": pl, "seq_len": sl,
                                     "seed": args.seed, "model": mname, "mse": mse,
-                                    "mae": mae, "params": n_params}) + "\n")
+                                    "mae": mae, "params": n_params, "n_vars": n_vars}) + "\n")
 
     print(f"\n{'='*48}\n{name}  pred_len={pl}   (lower = better)")
     for mname, (mse, mae) in results.items():

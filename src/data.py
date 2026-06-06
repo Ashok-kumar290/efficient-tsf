@@ -73,12 +73,18 @@ class CustomCSV(Dataset):
         "then find the CSV (e.g.  find . -name electricity.csv) and pass its real path."
     )
 
-    def __init__(self, path: str, split: str = "train", seq_len: int = 96, pred_len: int = 96):
+    def __init__(self, path: str, split: str = "train", seq_len: int = 96, pred_len: int = 96,
+                 max_vars: int = 0):
         assert split in {"train", "val", "test"}
         if not os.path.exists(path):
             raise FileNotFoundError(f"{path} not found.\n{self.DOWNLOAD_HINT}")
         df = pd.read_csv(path)
         data = df[[c for c in df.columns if c.lower() != "date"]].values.astype(np.float32)
+        if max_vars and max_vars < data.shape[1]:
+            # subsample a FIXED set of columns (rng(0), independent of the training seed) so the
+            # crossover study compares the *same* variables across seeds — only V changes.
+            idx = np.sort(np.random.default_rng(0).choice(data.shape[1], max_vars, replace=False))
+            data = data[:, idx]
         n = len(data)
         n_tr, n_va = int(n * 0.7), int(n * 0.1)
         lo = {"train": 0, "val": n_tr - seq_len, "test": n_tr + n_va - seq_len}
