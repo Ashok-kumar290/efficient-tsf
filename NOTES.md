@@ -1,45 +1,69 @@
 # Status & Resume Notes
 
-_Last updated: 2026-06-05_
+_Last updated: 2026-06-06_
 
 ## What this is
 `EfficientDualAxis` — a sub-quadratic dual-axis forecaster — + a validated LTSF benchmark
-harness. Core question: **does cross-variable mixing help, and when?**
+harness. Core question: **does cross-variable mixing help, and when — and can it be done cheaply?**
 
-## Findings so far
-- **Harness validated** — LinearBaseline MSE ≈ published DLinear (ETTh1 ~0.39; Electricity 0.1948 ≈ published 0.197). Numbers are trustworthy and comparable to the literature.
-- **ETTh1 (7 vars)** — cross-variable mixing **HURTS** (0.41 vs 0.39); channel-independent ≈ linear (tie). Simple wins on low-dimensional data.
-- **Electricity (321 vars), pred_len=96 — RESOLVED ✅ (A100, batch 128, 2026-06-05):**
-  | Model | TEST MSE | TEST MAE |
-  |---|---|---|
-  | LinearBaseline | 0.1948 | 0.2773 |
-  | DualAxis (channel-indep) | 0.1635 | 0.2512 |
-  | **DualAxis (cross-variable)** | **0.1472** | **0.2423** |
-  Clean monotonic ordering. **Cross-variable beats channel-indep by ~10%, beats linear by ~24%.**
-  Kicker: 0.1472 ≈ published **iTransformer** (0.148, full quadratic cross-attention) — *matched
-  sub-quadratically.* This is the paper's core finding.
+## RESULT — both halves done (3 seeds, A100, batch 128)
 
-## The thesis (now supported by data)
-**Cross-variable mixing hurts on low-dim data (7 vars), helps decisively on high-dim (321 vars)
-— and can be done in O(n) without losing accuracy vs full attention.**
+### 1. Accuracy — Electricity (321 vars), mean ± std over seeds {2021, 2022, 2023}
+TEST MSE (lower = better). Cross-variable wins at **every** horizon, by **many std** — unambiguous.
 
-## Resume here (Colab A100)
+| pred_len | LinearBaseline | DualAxis (channel-indep) | **DualAxis (cross-variable)** | cross vs chan-indep | cross vs linear |
+|---|---|---|---|---|---|
+| 96  | 0.1950 ± 0.0002 | 0.1646 ± 0.0004 | **0.1491 ± 0.0013** | −9.4% | −23.5% |
+| 192 | 0.1943 ± 0.0001 | 0.1742 ± 0.0014 | **0.1639 ± 0.0002** | −5.9% | −15.6% |
+| 336 | 0.2072 ± 0.0003 | 0.1912 ± 0.0010 | **0.1763 ± 0.0005** | −7.8% | −14.9% |
+| 720 | 0.2428 ± 0.0003 | 0.2342 ± 0.0030 | **0.2051 ± 0.0017** | −12.4% | −15.5% |
+
+The std (≤0.003) is far smaller than the gaps between models → the effect is statistically solid,
+not seed luck. Cross-variable MSE is in the same range as published **iTransformer** (a full
+*quadratic* cross-attention model) — i.e. matched/competitive, achieved sub-quadratically.
+
+### 2. Efficiency — cross-variable mixer, linear vs softmax attention, scaling in #variables V
+(A100, batch=256, dim=128, heads=4, 30 iters; same [B,V,D]->[B,V,D] interface.)
+
+| V | linear ms | linear MiB | softmax ms | softmax MiB | speedup |
+|---|---|---|---|---|---|
+| 7   | 0.61 | 21.7  | 0.34 | 15.1   | 0.6× |
+| 21  | 0.61 | 37.5  | 0.34 | 27.1   | 0.6× |
+| 100 | 0.96 | 127.1 | 0.94 | 140.1  | 1.0× |
+| 200 | 1.80 | 243.5 | 2.46 | 423.1  | 1.4× |
+| 321 | 2.79 | 376.8 | 5.13 | 975.1  | 1.8× |
+| 500 | 4.17 | 578.2 | 9.91 | 2212.8 | 2.4× |
+| 862 | 7.07 | 986.9 | 26.89| 6245.7 | **3.8×** |
+
+Fitted scaling exponent (top-3 V): **linear 0.94 (≈ O(V))** vs **softmax 1.68 (super-linear → O(V²))**.
+Memory is the cleanest tell: at V=862 softmax uses **6.3× more memory** (the V×V attention matrix).
+Honest crossover: at tiny V (≤~50) linear attention is *slower* (feature-map/kv overhead dominates);
+it wins from V≈100 up, exactly where it matters (Electricity 321, Traffic 862).
+
+## The thesis (now fully supported)
+**Cross-variable mixing hurts on low-dim data (ETTh1, 7 vars), helps decisively on high-dim
+(Electricity, 321 vars) at all horizons — and is done in ~O(V) instead of O(V²), matching a
+quadratic cross-attention model's accuracy at a fraction of the compute/memory.**
+
+Model size: ~0.67M–1.55M params (grows with pred_len). Cross-variable mechanism adds only ~132K
+params over channel-indep. Tiny vs iTransformer/PatchTST (several M–tens of M).
+
+## Reproduce
 ```bash
-cd /content
 git clone https://github.com/Ashok-kumar290/efficient-tsf.git && cd efficient-tsf
-pip install -q numpy pandas gdown
-gdown 1FHH0S3d6IK_UOpg6taBRavx4MragRLo1 -O electricity.zip   # just the electricity file
+pip install -q torch numpy pandas gdown
+gdown 1FHH0S3d6IK_UOpg6taBRavx4MragRLo1 -O electricity.zip
 unzip -oq electricity.zip -d ltsf_data
 CSV=$(find ltsf_data -name electricity.csv | head -1)
-python experiments/train_ltsf.py --dataset "$CSV" --epochs 30 --pred-len 96 --batch 128
+bash experiments/run_paper.sh "$CSV" /content/drive/MyDrive/efficient-tsf/results.jsonl  # persist to Drive
+python experiments/bench_efficiency.py
 ```
-Read all three TEST numbers. **If cross-variable > channel-independent → that's the paper's core finding** ("cross-variable modeling hurts on low-dim data, helps on high-dim — done sub-quadratically").
+`run_paper.sh` is resumable (skips finished seed×horizon) and aggregates to mean±std at the end.
 
-## Next (to make it paper-ready — in priority order)
-1. **Error bars** — rerun Electricity-96 with 3 seeds. The 0.1635→0.1472 gap should survive; show it.
-2. **Full horizon table** — pred_len 192/336/720 on Electricity (one horizon isn't a result).
-3. **Efficiency metrics (FLOPs / throughput vs a quadratic cross-attention baseline)** — NOT optional.
-   The whole claim is "sub-quadratic." Accuracy is shown; cheaper-than-quadratic is NOT yet measured. This measurement *is* the contribution.
-4. Confirm the trend on **Traffic (862 vars)**, batch 64.
-5. Ablation: swap the temporal linear-attention for an **SSM (Mamba-style)** block.
-- `--batch 128` for Electricity (321 vars) on A100; `--batch 64` for Traffic (862). 512 OOMs.
+## Next (writing the paper)
+1. **Drop published baselines into the accuracy table** (DLinear/PatchTST/iTransformer/Crossformer
+   at each horizon) for direct comparison — sanity: our Linear ≈ published DLinear.
+2. **Confirm on Traffic (862 vars)**, batch 64 — the highest-dim dataset, where efficiency matters most.
+3. **Ablation:** swap temporal linear-attention for an SSM (Mamba-style) block.
+4. Draft: intro / method (dual-axis, linear attention) / results (the two tables above) /
+   related work / honest limitations (linear attn loses at tiny V; single dataset family so far).
