@@ -29,9 +29,15 @@ def main():
         print(f"no results in {path}")
         return
 
+    # dedupe by (dataset, pred_len, model, seed) — a resumed/re-run combo can append
+    # duplicate rows; keep the latest so each seed counts once.
+    dedup: dict[tuple, dict] = {}
+    for r in rows:
+        dedup[(r["dataset"], r["pred_len"], r["model"], r["seed"])] = r
+
     # group: (dataset, pred_len, model) -> list of (mse, mae) across seeds
     g: dict[tuple, dict[str, list[float]]] = defaultdict(lambda: {"mse": [], "mae": []})
-    for r in rows:
+    for r in dedup.values():
         key = (r["dataset"], r["pred_len"], r["model"])
         g[key]["mse"].append(r["mse"])
         g[key]["mae"].append(r["mae"])
